@@ -26,6 +26,15 @@ pub struct CompositionReview {
     pub suggestions: Vec<String>,
 }
 
+const AI_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(AI_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))
+}
+
 pub async fn chat_completion(
     api_url: &str,
     api_key: &str,
@@ -33,7 +42,7 @@ pub async fn chat_completion(
     system_prompt: &str,
     user_content: &str,
 ) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = http_client()?;
     let base_url = api_url.trim_end_matches('/');
     let url = format!("{}/chat/completions", base_url);
 
@@ -227,7 +236,7 @@ pub async fn chat_with_provider_raw(
     system_prompt: &str,
     user_content: &str,
 ) -> Result<ChatResponse, String> {
-    let client = reqwest::Client::new();
+    let client = http_client()?;
 
     let (url, headers, body) = match config.api_mode {
         ApiMode::ChatCompletions => build_chat_completions(config, system_prompt, user_content),
@@ -488,13 +497,16 @@ fn build_openai_responses(config: &ProviderConfig, _system: &str, user: &str) ->
 }
 
 fn build_gemini_native(config: &ProviderConfig, system: &str, user: &str) -> (String, Vec<(String, String)>, serde_json::Value) {
+    // Keep the API key out of the URL: URLs end up in error messages,
+    // proxy logs and crash reports.
     let url = format!(
-        "{}/models/{}:generateContent?key={}",
+        "{}/models/{}:generateContent",
         config.url.trim_end_matches('/'),
-        config.model_id,
-        config.api_key
+        config.model_id
     );
-    let headers = vec![];
+    let headers = vec![
+        ("x-goog-api-key".to_string(), config.api_key.clone()),
+    ];
 
     let mut body = json!({
         "contents": [

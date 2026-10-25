@@ -222,6 +222,37 @@ pub fn import_bundled_csv(conn: &mut Connection, csv_data: &str, deck_id: &str) 
     Ok(count)
 }
 
+/// Anki collection databases are uncompressed zip entries. Cap the extracted
+/// size so a crafted `.apkg` cannot exhaust memory/disk (zip bomb).
+const MAX_COLLECTION_BYTES: u64 = 512 * 1024 * 1024;
+
+fn extract_collection_entry(
+    archive: &mut ZipArchive<File>,
+    collection_name: &str,
+) -> Result<NamedTempFile, String> {
+    let collection = archive
+        .by_name(collection_name)
+        .map_err(|e| format!("Failed to read collection from APKG: {}", e))?;
+
+    if collection.size() > MAX_COLLECTION_BYTES {
+        return Err("APKG collection database is too large".to_string());
+    }
+
+    let mut temp_file = NamedTempFile::new()
+        .map_err(|e| format!("Failed to create temp DB: {}", e))?;
+    let mut limited = collection.take(MAX_COLLECTION_BYTES + 1);
+    let copied = std::io::copy(&mut limited, &mut temp_file)
+        .map_err(|e| format!("Failed to extract collection DB: {}", e))?;
+    if copied > MAX_COLLECTION_BYTES {
+        return Err("APKG collection database is too large".to_string());
+    }
+    temp_file
+        .flush()
+        .map_err(|e| format!("Failed to flush temp collection DB: {}", e))?;
+
+    Ok(temp_file)
+}
+
 fn import_apkg(
     conn: &mut Connection,
     deck_id: &str,
@@ -233,22 +264,7 @@ fn import_apkg(
     let collection_name = find_collection_entry(&mut archive)
         .ok_or_else(|| "APKG does not contain collection.anki2 or collection.anki21".to_string())?;
 
-    let mut temp_file = NamedTempFile::new().map_err(|e| format!("Failed to create temp DB: {}", e))?;
-    {
-        let mut collection = archive
-            .by_name(&collection_name)
-            .map_err(|e| format!("Failed to read collection from APKG: {}", e))?;
-        let mut buf = Vec::new();
-        collection
-            .read_to_end(&mut buf)
-            .map_err(|e| format!("Failed to extract collection DB: {}", e))?;
-        temp_file
-            .write_all(&buf)
-            .map_err(|e| format!("Failed to write temp collection DB: {}", e))?;
-        temp_file
-            .flush()
-            .map_err(|e| format!("Failed to flush temp collection DB: {}", e))?;
-    }
+    let temp_file = extract_collection_entry(&mut archive, &collection_name)?;
 
     let anki_conn = Connection::open_with_flags(
         temp_file.path(),
@@ -432,22 +448,7 @@ fn preview_apkg(file_path: &str) -> Result<ImportPreview, String> {
     let collection_name = find_collection_entry(&mut archive)
         .ok_or_else(|| "APKG does not contain collection.anki2 or collection.anki21".to_string())?;
 
-    let mut temp_file = NamedTempFile::new().map_err(|e| format!("Failed to create temp DB: {}", e))?;
-    {
-        let mut collection = archive
-            .by_name(&collection_name)
-            .map_err(|e| format!("Failed to read collection from APKG: {}", e))?;
-        let mut buf = Vec::new();
-        collection
-            .read_to_end(&mut buf)
-            .map_err(|e| format!("Failed to extract collection DB: {}", e))?;
-        temp_file
-            .write_all(&buf)
-            .map_err(|e| format!("Failed to write temp collection DB: {}", e))?;
-        temp_file
-            .flush()
-            .map_err(|e| format!("Failed to flush temp collection DB: {}", e))?;
-    }
+    let temp_file = extract_collection_entry(&mut archive, &collection_name)?;
 
     let anki_conn = Connection::open_with_flags(
         temp_file.path(),
@@ -691,8 +692,12 @@ fn load_anki_models(conn: &Connection) -> Result<HashMap<i64, Vec<String>>, Stri
 
 fn find_collection_entry(archive: &mut ZipArchive<File>) -> Option<String> {
     for idx in 0..archive.len() {
-        let file = archive.by_index(idx).ok()?;
-        let name = file.name().to_string();
+        let Ok(file) = archive.by_index(idx) else {
+            continue;
+        };
+        let Ok(name) = file.name().map(|name| name.into_owned()) else {
+            continue;
+        };
         if name.ends_with("collection.anki2") || name.ends_with("collection.anki21") {
             return Some(name);
         }
@@ -1070,5 +1075,85 @@ mod tests {
             .expect("read imported card");
         assert_eq!(row.0, "中国人[ちゅうごくじん]", "front should be Japanese word, not sort number");
         assert_eq!(row.1, "中国人");
+    }
+
+    #[test]
+    fn imports_csv_with_markdown_back_and_generated_headers() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let csv_path = temp_dir.path().join("markdown-vocabulary.csv");
+        std::fs::write(
+            &csv_path,
+            "\"front\",\"back\",\"phonetic\",\"example\"\n\"commit\",\"- **commit** n. 犯罪；承诺\n  - **搭配**：commit a crime\n  - **易混点**：commit vs comment\",\"/kəˈmɪt/\",\"He committed a crime.\"\n",
+        )
+        .expect("write csv");
+
+        let mut mint_conn = Connection::open_in_memory().expect("open mint db");
+        mint_conn
+            .execute(
+                "CREATE TABLE decks (
+                    id TEXT PRIMARY KEY,
+                    updated_at TEXT NOT NULL,
+                    card_count INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            )
+            .expect("create decks");
+        mint_conn
+            .execute(
+                "CREATE TABLE cards (
+                    id TEXT PRIMARY KEY,
+                    deck_id TEXT NOT NULL,
+                    front TEXT NOT NULL,
+                    back TEXT NOT NULL,
+                    phonetic TEXT NOT NULL DEFAULT '',
+                    example_sentence TEXT NOT NULL DEFAULT '',
+                    ease_factor REAL DEFAULT 2.5,
+                    interval INTEGER DEFAULT 0,
+                    repetitions INTEGER DEFAULT 0,
+                    stability REAL DEFAULT 0,
+                    difficulty REAL DEFAULT 0,
+                    lapses INTEGER DEFAULT 0,
+                    fsrs_state INTEGER DEFAULT 0,
+                    next_review_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )",
+                [],
+            )
+            .expect("create cards");
+        mint_conn
+            .execute(
+                "INSERT INTO decks (id, updated_at, card_count) VALUES ('deck-1', '2026-01-01T00:00:00.000Z', 0)",
+                [],
+            )
+            .expect("insert deck");
+
+        let report = import_file(
+            &mut mint_conn,
+            "deck-1",
+            csv_path.to_str().expect("csv path"),
+            None,
+        )
+        .expect("import csv");
+
+        assert_eq!(report.source_format, "csv");
+        assert_eq!(report.imported_count, 1);
+        assert_eq!(report.matched_fields.front, vec!["front"]);
+        assert_eq!(report.matched_fields.back, vec!["back"]);
+        assert_eq!(report.matched_fields.phonetic, vec!["phonetic"]);
+        assert_eq!(report.matched_fields.example_sentence, vec!["example"]);
+
+        let (back, phonetic, example): (String, String, String) = mint_conn
+            .query_row(
+                "SELECT back, phonetic, example_sentence FROM cards WHERE deck_id = 'deck-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read imported card");
+        assert!(back.contains("- **commit**"));
+        assert!(back.contains("commit a crime"));
+        assert!(back.contains('\n'));
+        assert_eq!(phonetic, "/kəˈmɪt/");
+        assert_eq!(example, "He committed a crime.");
     }
 }

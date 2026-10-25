@@ -66,7 +66,7 @@
 ### 環境要件
 
 - [Node.js](https://nodejs.org/) (v18+)
-- [Rust](https://www.rust-lang.org/) (1.77.2+)
+- [Rust](https://www.rust-lang.org/) (1.90+)
 - [Tauri v2 システム依存関係](https://v2.tauri.app/start/prerequisites/)
 
 ### 開発モード

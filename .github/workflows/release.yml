@@ -88,10 +88,34 @@ jobs:
         shell: bash
         run: |
           gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
             --title "MintWord ${{ github.ref_name }}" \
             --draft \
             --verify-tag \
             2>/dev/null || true
-          for f in src-tauri/target/release/bundle/*/*; do
-            [ -f "$f" ] && gh release upload "${{ github.ref_name }}" "$f" --clobber
+          shopt -s nullglob
+          files=(src-tauri/target/${{ matrix.target }}/release/bundle/*/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No bundle files found for ${{ matrix.target }}"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            if [ -f "$f" ]; then
+              gh release upload "${{ github.ref_name }}" "$f" --repo "${{ github.repository }}" --clobber
+            fi
           done
+
+  publish:
+    name: Publish release
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false

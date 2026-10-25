@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod security;
 mod engine;
 mod importer;
 mod tts;
@@ -79,7 +80,6 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_decks,

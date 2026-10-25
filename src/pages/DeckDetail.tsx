@@ -4,6 +4,7 @@ import { useParams, Link } from 'react-router-dom';
 import { getCards, addCard, deleteCard } from '../lib/api';
 import { t } from '../lib/i18n';
 import { ArrowLeftIcon, PlusIcon } from '@heroicons/react/24/outline';
+import Markdown from '../components/Markdown';
 
 
 export default function DeckDetail() {
@@ -118,8 +119,8 @@ export default function DeckDetail() {
               {card.phonetic && (
                 <div className="text-sm text-gray-400 dark:text-gray-500">{card.phonetic}</div>
               )}
-              <div className="text-sm text-gray-600 dark:text-gray-400 mt-0.5 whitespace-pre-line line-clamp-2">
-                {card.back}
+              <div className="mt-0.5 max-h-12 overflow-hidden text-sm text-gray-600 dark:text-gray-400">
+                <Markdown>{card.back}</Markdown>
               </div>
             </div>
             <button

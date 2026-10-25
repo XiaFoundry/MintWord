@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use serde::{Serialize, Deserialize};
 use crate::ai::{Question, CompositionReview};
+use crate::security::checked_id;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Article {
@@ -33,8 +34,8 @@ fn ensure_library_dir(app_dir: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn article_path(lib_dir: &Path, id: &str) -> PathBuf {
-    lib_dir.join(format!("{}.json", id))
+fn article_path(lib_dir: &Path, id: &str) -> Result<PathBuf, String> {
+    Ok(lib_dir.join(format!("{}.json", checked_id(id)?)))
 }
 
 pub fn list_articles(app_dir: &Path) -> Result<Vec<ArticleSummary>, String> {
@@ -47,6 +48,15 @@ pub fn list_articles(app_dir: &Path) -> Result<Vec<ArticleSummary>, String> {
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
             if let Ok(article) = serde_json::from_str::<Article>(&content) {
+                let stem_matches = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|stem| stem == article.id.as_str())
+                    .unwrap_or(false);
+                if !stem_matches || checked_id(&article.id).is_err() {
+                    log::warn!("Skipping article file with mismatched id: {:?}", path);
+                    continue;
+                }
                 articles.push(ArticleSummary {
                     id: article.id,
                     title: article.title,
@@ -63,7 +73,7 @@ pub fn list_articles(app_dir: &Path) -> Result<Vec<ArticleSummary>, String> {
 
 pub fn get_article(app_dir: &Path, id: &str) -> Result<Article, String> {
     let lib_dir = ensure_library_dir(app_dir)?;
-    let path = article_path(&lib_dir, id);
+    let path = article_path(&lib_dir, id)?;
     let content = fs::read_to_string(&path).map_err(|e| format!("Article not found: {}", e))?;
     serde_json::from_str(&content).map_err(|e| e.to_string())
 }
@@ -81,13 +91,13 @@ pub fn create_article(app_dir: &Path, title: String, content: String, source: St
         questions: None,
     };
     let json = serde_json::to_string_pretty(&article).map_err(|e| e.to_string())?;
-    fs::write(article_path(&lib_dir, &id), json).map_err(|e| e.to_string())?;
+    fs::write(article_path(&lib_dir, &id)?, json).map_err(|e| e.to_string())?;
     Ok(article)
 }
 
 pub fn delete_article(app_dir: &Path, id: &str) -> Result<(), String> {
     let lib_dir = ensure_library_dir(app_dir)?;
-    let path = article_path(&lib_dir, id);
+    let path = article_path(&lib_dir, id)?;
     fs::remove_file(&path).map_err(|e| format!("Failed to delete article: {}", e))
 }
 
@@ -103,7 +113,7 @@ pub fn import_txt(app_dir: &Path, file_path: &str) -> Result<Article, String> {
 
 pub fn save_questions(app_dir: &Path, article_id: &str, questions: Vec<Question>) -> Result<(), String> {
     let lib_dir = ensure_library_dir(app_dir)?;
-    let path = article_path(&lib_dir, article_id);
+    let path = article_path(&lib_dir, article_id)?;
     let mut article: Article = {
         let content = fs::read_to_string(&path).map_err(|e| format!("Article not found: {}", e))?;
         serde_json::from_str(&content).map_err(|e| e.to_string())?
@@ -150,8 +160,8 @@ fn ensure_compositions_dir(app_dir: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn composition_path(lib_dir: &Path, id: &str) -> PathBuf {
-    lib_dir.join(format!("{}.json", id))
+fn composition_path(lib_dir: &Path, id: &str) -> Result<PathBuf, String> {
+    Ok(lib_dir.join(format!("{}.json", checked_id(id)?)))
 }
 
 pub fn list_compositions(app_dir: &Path) -> Result<Vec<CompositionSummary>, String> {
@@ -164,6 +174,15 @@ pub fn list_compositions(app_dir: &Path) -> Result<Vec<CompositionSummary>, Stri
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
             if let Ok(composition) = serde_json::from_str::<Composition>(&content) {
+                let stem_matches = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|stem| stem == composition.id.as_str())
+                    .unwrap_or(false);
+                if !stem_matches || checked_id(&composition.id).is_err() {
+                    log::warn!("Skipping composition file with mismatched id: {:?}", path);
+                    continue;
+                }
                 compositions.push(CompositionSummary {
                     id: composition.id,
                     title: composition.title,
@@ -180,7 +199,7 @@ pub fn list_compositions(app_dir: &Path) -> Result<Vec<CompositionSummary>, Stri
 
 pub fn get_composition(app_dir: &Path, id: &str) -> Result<Composition, String> {
     let dir = ensure_compositions_dir(app_dir)?;
-    let path = composition_path(&dir, id);
+    let path = composition_path(&dir, id)?;
     let content = fs::read_to_string(&path).map_err(|e| format!("Composition not found: {}", e))?;
     serde_json::from_str(&content).map_err(|e| e.to_string())
 }
@@ -198,13 +217,13 @@ pub fn create_composition(app_dir: &Path, title: String, content: String, source
         review: None,
     };
     let json = serde_json::to_string_pretty(&composition).map_err(|e| e.to_string())?;
-    fs::write(composition_path(&dir, &id), json).map_err(|e| e.to_string())?;
+    fs::write(composition_path(&dir, &id)?, json).map_err(|e| e.to_string())?;
     Ok(composition)
 }
 
 pub fn delete_composition(app_dir: &Path, id: &str) -> Result<(), String> {
     let dir = ensure_compositions_dir(app_dir)?;
-    let path = composition_path(&dir, id);
+    let path = composition_path(&dir, id)?;
     fs::remove_file(&path).map_err(|e| format!("Failed to delete composition: {}", e))
 }
 
@@ -220,7 +239,7 @@ pub fn import_composition_txt(app_dir: &Path, file_path: &str) -> Result<Composi
 
 pub fn save_composition_review(app_dir: &Path, composition_id: &str, review: CompositionReview) -> Result<(), String> {
     let dir = ensure_compositions_dir(app_dir)?;
-    let path = composition_path(&dir, composition_id);
+    let path = composition_path(&dir, composition_id)?;
     let mut composition: Composition = {
         let content = fs::read_to_string(&path).map_err(|e| format!("Composition not found: {}", e))?;
         serde_json::from_str(&content).map_err(|e| e.to_string())?
@@ -234,4 +253,42 @@ pub fn save_composition_review(app_dir: &Path, composition_id: &str, review: Com
 pub fn get_composition_review(app_dir: &Path, composition_id: &str) -> Result<CompositionReview, String> {
     let composition = get_composition(app_dir, composition_id)?;
     composition.review.ok_or_else(|| "No review for this composition".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_traversal_ids_for_articles_and_compositions() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        assert!(get_article(temp.path(), "../../etc/passwd").is_err());
+        assert!(delete_article(temp.path(), "../../etc/passwd").is_err());
+        assert!(save_questions(temp.path(), "../../etc/passwd", Vec::new()).is_err());
+        assert!(get_composition(temp.path(), "../secret").is_err());
+        assert!(delete_composition(temp.path(), "../secret").is_err());
+    }
+
+    #[test]
+    fn round_trips_generated_ids() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let article = create_article(temp.path(), "title".into(), "body".into(), "txt".into())
+            .expect("create article");
+        assert_eq!(get_article(temp.path(), &article.id).expect("read article").title, "title");
+        assert_eq!(list_articles(temp.path()).expect("list articles").len(), 1);
+    }
+
+    #[test]
+    fn skips_files_whose_stored_id_disagrees_with_filename() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = get_library_dir(temp.path());
+        fs::create_dir_all(&dir).expect("create library dir");
+        fs::write(
+            dir.join("evil.json"),
+            r#"{"id":"../../escape","title":"evil","content":"","source":"","created_at":"","questions":null}"#,
+        )
+        .expect("write malicious article");
+
+        assert!(list_articles(temp.path()).expect("list articles").is_empty());
+    }
 }

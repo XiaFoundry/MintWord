@@ -1,5 +1,8 @@
 use std::io::Cursor;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::sync::LazyLock;
+#[cfg(target_os = "macos")]
 use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
@@ -7,14 +10,21 @@ use std::process::{Child, Command};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
-struct AudioPlayer {
-    _stream: rodio::OutputStream,
-    sink: rodio::Sink,
+enum AudioCommand {
+    Play(Vec<u8>, u64),
+    Stop,
 }
 
-unsafe impl Send for AudioPlayer {}
-
-static AUDIO_PLAYER: Mutex<Option<AudioPlayer>> = Mutex::new(None);
+/// Audio playback is owned by one dedicated thread because
+/// `rodio::OutputStream` (and the underlying cpal stream) is `!Send`.
+/// Sending it across threads via an `unsafe impl Send` would be UB.
+static AUDIO_TX: LazyLock<Sender<AudioCommand>> = LazyLock::new(|| {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || audio_thread(rx));
+    AUDIO_STARTED.store(true, Ordering::Relaxed);
+    tx
+});
+static AUDIO_STARTED: AtomicBool = AtomicBool::new(false);
 static TTS_GEN: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "macos")]
 static MACOS_SAY_CHILD: Mutex<Option<(u64, Child)>> = Mutex::new(None);
@@ -39,9 +49,8 @@ pub fn speak_ai_bg(text: String, api_url: String, api_key: String, voice: String
 
 pub fn stop_audio() {
     TTS_GEN.fetch_add(1, Ordering::Relaxed);
-    let guard = AUDIO_PLAYER.lock().unwrap();
-    if let Some(player) = guard.as_ref() {
-        player.sink.stop();
+    if AUDIO_STARTED.load(Ordering::Relaxed) {
+        let _ = AUDIO_TX.send(AudioCommand::Stop);
     }
 
     #[cfg(target_os = "macos")]
@@ -279,7 +288,10 @@ async fn do_ai_tts(
         return Ok(());
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let body = serde_json::json!({
         "model": model,
         "input": text,
@@ -309,37 +321,57 @@ async fn do_ai_tts(
     play_audio_with_gen(&bytes, gen)
 }
 
+fn audio_thread(rx: mpsc::Receiver<AudioCommand>) {
+    let (_stream, handle) = match rodio::OutputStream::try_default() {
+        Ok(value) => value,
+        Err(e) => {
+            log::error!("Audio output init failed: {}", e);
+            return;
+        }
+    };
+    // `_stream` must stay alive for the lifetime of this thread; it is `!Send`
+    // and is therefore never moved out of it.
+    let mut sink: Option<rodio::Sink> = None;
+
+    while let Ok(command) = rx.recv() {
+        match command {
+            AudioCommand::Play(data, gen) => {
+                if TTS_GEN.load(Ordering::Relaxed) != gen {
+                    continue;
+                }
+                if let Some(previous) = sink.take() {
+                    previous.stop();
+                }
+                let source = match rodio::Decoder::new(Cursor::new(data)) {
+                    Ok(source) => source,
+                    Err(e) => {
+                        log::error!("Audio decode failed: {}", e);
+                        continue;
+                    }
+                };
+                match rodio::Sink::try_new(&handle) {
+                    Ok(new_sink) => {
+                        new_sink.append(source);
+                        sink = Some(new_sink);
+                    }
+                    Err(e) => log::error!("Sink creation failed: {}", e),
+                }
+            }
+            AudioCommand::Stop => {
+                if let Some(previous) = sink.take() {
+                    previous.stop();
+                }
+            }
+        }
+    }
+}
+
 fn play_audio_with_gen(data: &[u8], gen: u64) -> Result<(), String> {
     if TTS_GEN.load(Ordering::Relaxed) != gen {
         return Ok(());
     }
 
-    let cursor = Cursor::new(data.to_vec());
-    let source = rodio::Decoder::new(cursor)
-        .map_err(|e| format!("Audio decode failed: {}", e))?;
-
-    let mut guard = AUDIO_PLAYER.lock().map_err(|e| e.to_string())?;
-
-    if TTS_GEN.load(Ordering::Relaxed) != gen {
-        return Ok(());
-    }
-
-    if let Some(player) = guard.as_ref() {
-        player.sink.stop();
-    }
-
-    let player = guard.get_or_insert_with(|| {
-        let (stream, handle) =
-            rodio::OutputStream::try_default().expect("Audio output failed");
-        let sink = rodio::Sink::try_new(&handle).expect("Sink creation failed");
-        AudioPlayer {
-            _stream: stream,
-            sink,
-        }
-    });
-
-    player.sink.stop();
-    player.sink.append(source);
-
-    Ok(())
+    AUDIO_TX
+        .send(AudioCommand::Play(data.to_vec(), gen))
+        .map_err(|e| format!("Audio thread unavailable: {}", e))
 }
