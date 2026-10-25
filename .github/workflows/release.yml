@@ -92,6 +92,15 @@ jobs:
             --draft \
             --verify-tag \
             2>/dev/null || true
-          for f in src-tauri/target/release/bundle/*/*; do
-            [ -f "$f" ] && gh release upload "${{ github.ref_name }}" "$f" --clobber
+          shopt -s nullglob
+          files=(src-tauri/target/${{ matrix.target }}/release/bundle/*/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No bundle files found for ${{ matrix.target }}"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            if [ -f "$f" ]; then
+              gh release upload "${{ github.ref_name }}" "$f" --clobber
+            fi
           done
+          gh release edit "${{ github.ref_name }}" --draft=false
