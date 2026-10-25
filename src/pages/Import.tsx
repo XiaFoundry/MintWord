@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Link, useSearchParams } from 'react-router-dom';
-import { getDecks, previewImportFile, importDeckFile, bulkAddCards } from '../lib/api';
+import { getDecks, previewImportFile, importDeckFile, bulkAddCards, createDeck, deleteDeck } from '../lib/api';
 import { t } from '../lib/i18n';
 import Select from '../components/Select';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
@@ -22,27 +22,33 @@ export default function ImportPage() {
   const [searchParams] = useSearchParams();
   const [selectedDeck, setSelectedDeck] = useState(searchParams.get('deckId') ?? '');
   const [bulkText, setBulkText] = useState('');
+  const [newDeckName, setNewDeckName] = useState('');
+  const [importMode, setImportMode] = useState<'existing' | 'new'>('existing');
   const [phase, setPhase] = useState<ImportPhase>({ kind: 'idle' });
   const [mapping, setMapping] = useState<FieldMappingSelection>(emptyMapping());
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
-  const previewRef = useRef<{ filePath: string; preview: ImportPreview } | null>(null);
+  const previewRef = useRef<{ filePath: string; preview: ImportPreview; mode: 'existing' | 'new' } | null>(null);
 
   function showToast(msg: string) {
     setToast({ message: msg, visible: true });
     setTimeout(() => setToast((prev) => ({ ...prev, visible: false })), 2000);
   }
 
-  async function handleSelectFile() {
+  async function handleSelectFile(mode: 'existing' | 'new') {
     const filePath = await open({
-      filters: [{ name: 'Deck Files', extensions: ['csv', 'apkg'] }],
+      filters: [{ name: 'Vocabulary Files', extensions: ['csv', 'apkg'] }],
       multiple: false,
     });
     if (!filePath) return;
 
+    setImportMode(mode);
+    if (mode === 'new' && !newDeckName.trim()) {
+      setNewDeckName(fileStem(filePath as string));
+    }
     setPhase({ kind: 'previewing' });
     try {
       const preview = await previewImportFile(filePath as string);
-      previewRef.current = { filePath: filePath as string, preview };
+      previewRef.current = { filePath: filePath as string, preview, mode };
       setMapping(preview.smart_mapping);
       setPhase({ kind: 'preview', filePath: filePath as string, preview });
     } catch (error) {
@@ -50,20 +56,45 @@ export default function ImportPage() {
     }
   }
 
-  function handleConfirm() {
+  async function handleConfirm() {
     if (!previewRef.current) return;
+    const { filePath, mode } = previewRef.current;
     setPhase({ kind: 'importing' });
+    let createdDeckId: string | null = null;
 
-    importDeckFile(selectedDeck, previewRef.current.filePath, mapping)
-      .then((report) => {
-        setPhase({ kind: 'done', report });
-        showToast(t('toast.imported', { n: report.imported_count }));
-        queryClient.invalidateQueries({ queryKey: ['decks'] });
-        queryClient.invalidateQueries({ queryKey: ['cards', selectedDeck] });
-      })
-      .catch((error) => {
-        setPhase({ kind: 'error', message: error instanceof Error ? error.message : t('error.import_failed') });
-      });
+    try {
+      let targetDeck = selectedDeck;
+      if (mode === 'new') {
+        const deck = await createDeck(
+          newDeckName.trim() || fileStem(filePath),
+          t('import.new_deck_desc'),
+          'en',
+          'zh',
+        );
+        createdDeckId = deck.id;
+        targetDeck = deck.id;
+      }
+      if (!targetDeck) {
+        throw new Error(t('import.select_deck'));
+      }
+
+      const report = await importDeckFile(targetDeck, filePath, mapping);
+      setPhase({ kind: 'done', report });
+      showToast(t('toast.imported', { n: report.imported_count }));
+      if (mode === 'new') {
+        setSelectedDeck(targetDeck);
+        setNewDeckName('');
+      }
+      queryClient.invalidateQueries({ queryKey: ['decks'] });
+      queryClient.invalidateQueries({ queryKey: ['cards', targetDeck] });
+      queryClient.invalidateQueries({ queryKey: ['deckProgress'] });
+      queryClient.invalidateQueries({ queryKey: ['dueCounts'] });
+    } catch (error) {
+      if (createdDeckId) {
+        await deleteDeck(createdDeckId).catch(() => {});
+      }
+      setPhase({ kind: 'error', message: error instanceof Error ? error.message : t('error.import_failed') });
+    }
   }
 
   const bulkMut = useMutation({
@@ -88,10 +119,10 @@ export default function ImportPage() {
 
       <div className="space-y-3">
         <Select
-          label="选择目标词库"
+          label={t('import.target_deck')}
           value={selectedDeck}
           onChange={setSelectedDeck}
-          placeholder="-- 选择词库 --"
+          placeholder={t('import.select_deck')}
           options={
             decks?.map((d) => ({
               value: d.id,
@@ -102,29 +133,27 @@ export default function ImportPage() {
       </div>
 
       <div className="space-y-3">
-        <h2 className="font-medium">{t('deck.import_csv')}</h2>
+        <h2 className="font-medium">{t('import.to_selected_deck')}</h2>
         <p className="text-xs text-gray-500 dark:text-gray-400">{t('import.file_hint')}</p>
 
-        {phase.kind === 'previewing' && (
+        {importMode === 'existing' && phase.kind === 'previewing' && (
           <StatusBox>{t('import.status_previewing')}</StatusBox>
         )}
-        {phase.kind === 'importing' && (
+        {importMode === 'existing' && phase.kind === 'importing' && (
           <StatusBox>{t('import.status_importing')}</StatusBox>
         )}
-        {phase.kind === 'error' && (
+        {importMode === 'existing' && phase.kind === 'error' && (
           <div className="text-sm text-center text-red-600 dark:text-red-400 py-2">{phase.message}</div>
         )}
 
         <button
-          onClick={handleSelectFile}
+          onClick={() => handleSelectFile('existing')}
           disabled={!selectedDeck || phase.kind === 'previewing' || phase.kind === 'importing'}
           className="w-full px-4 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-hover disabled:opacity-50 transition-colors"
         >
           {t('file.select_deck_file')}
         </button>
       </div>
-
-      {phase.kind === 'done' && <ImportReportCard report={phase.report} />}
 
       {phase.kind === 'preview' && (
         <ImportModal
@@ -155,6 +184,36 @@ export default function ImportPage() {
           {t('common.import')}
         </button>
       </div>
+
+      <div className="border-t border-border pt-6 space-y-3">
+        <h2 className="font-medium">{t('import.from_file')}</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400">{t('import.new_deck_hint')}</p>
+        <input
+          value={newDeckName}
+          onChange={(e) => setNewDeckName(e.target.value)}
+          placeholder={t('import.new_deck_name')}
+          disabled={phase.kind === 'previewing' || phase.kind === 'importing'}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        {importMode === 'new' && phase.kind === 'previewing' && (
+          <StatusBox>{t('import.status_previewing')}</StatusBox>
+        )}
+        {importMode === 'new' && phase.kind === 'importing' && (
+          <StatusBox>{t('import.status_importing')}</StatusBox>
+        )}
+        {importMode === 'new' && phase.kind === 'error' && (
+          <div className="text-sm text-center text-red-600 dark:text-red-400 py-2">{phase.message}</div>
+        )}
+        <button
+          onClick={() => handleSelectFile('new')}
+          disabled={phase.kind === 'previewing' || phase.kind === 'importing'}
+          className="w-full px-4 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-hover disabled:opacity-50 transition-colors"
+        >
+          {t('import.create_and_import')}
+        </button>
+      </div>
+
+      {phase.kind === 'done' && <ImportReportCard report={phase.report} />}
 
       <div
         className={`fixed bottom-4 right-4 bg-primary text-white px-4 py-2 rounded-lg text-sm shadow-lg z-40 transition-all duration-300 ease-out ${
@@ -387,6 +446,11 @@ function ImportReportCard({ report }: { report: ImportReport }) {
 
 function emptyMapping(): FieldMappingSelection {
   return { front: null, back: null, phonetic: null, example_sentence: null };
+}
+
+function fileStem(path: string): string {
+  const filename = path.split(/[\\/]/).pop() ?? '';
+  return filename.replace(/\.(csv|apkg)$/i, '') || t('import.default_deck_name');
 }
 
 function formatFieldList(fields: string[]): string {

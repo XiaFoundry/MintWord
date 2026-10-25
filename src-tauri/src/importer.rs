@@ -1076,4 +1076,84 @@ mod tests {
         assert_eq!(row.0, "中国人[ちゅうごくじん]", "front should be Japanese word, not sort number");
         assert_eq!(row.1, "中国人");
     }
+
+    #[test]
+    fn imports_csv_with_markdown_back_and_generated_headers() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let csv_path = temp_dir.path().join("markdown-vocabulary.csv");
+        std::fs::write(
+            &csv_path,
+            "\"front\",\"back\",\"phonetic\",\"example\"\n\"commit\",\"- **commit** n. 犯罪；承诺\n  - **搭配**：commit a crime\n  - **易混点**：commit vs comment\",\"/kəˈmɪt/\",\"He committed a crime.\"\n",
+        )
+        .expect("write csv");
+
+        let mut mint_conn = Connection::open_in_memory().expect("open mint db");
+        mint_conn
+            .execute(
+                "CREATE TABLE decks (
+                    id TEXT PRIMARY KEY,
+                    updated_at TEXT NOT NULL,
+                    card_count INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            )
+            .expect("create decks");
+        mint_conn
+            .execute(
+                "CREATE TABLE cards (
+                    id TEXT PRIMARY KEY,
+                    deck_id TEXT NOT NULL,
+                    front TEXT NOT NULL,
+                    back TEXT NOT NULL,
+                    phonetic TEXT NOT NULL DEFAULT '',
+                    example_sentence TEXT NOT NULL DEFAULT '',
+                    ease_factor REAL DEFAULT 2.5,
+                    interval INTEGER DEFAULT 0,
+                    repetitions INTEGER DEFAULT 0,
+                    stability REAL DEFAULT 0,
+                    difficulty REAL DEFAULT 0,
+                    lapses INTEGER DEFAULT 0,
+                    fsrs_state INTEGER DEFAULT 0,
+                    next_review_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )",
+                [],
+            )
+            .expect("create cards");
+        mint_conn
+            .execute(
+                "INSERT INTO decks (id, updated_at, card_count) VALUES ('deck-1', '2026-01-01T00:00:00.000Z', 0)",
+                [],
+            )
+            .expect("insert deck");
+
+        let report = import_file(
+            &mut mint_conn,
+            "deck-1",
+            csv_path.to_str().expect("csv path"),
+            None,
+        )
+        .expect("import csv");
+
+        assert_eq!(report.source_format, "csv");
+        assert_eq!(report.imported_count, 1);
+        assert_eq!(report.matched_fields.front, vec!["front"]);
+        assert_eq!(report.matched_fields.back, vec!["back"]);
+        assert_eq!(report.matched_fields.phonetic, vec!["phonetic"]);
+        assert_eq!(report.matched_fields.example_sentence, vec!["example"]);
+
+        let (back, phonetic, example): (String, String, String) = mint_conn
+            .query_row(
+                "SELECT back, phonetic, example_sentence FROM cards WHERE deck_id = 'deck-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read imported card");
+        assert!(back.contains("- **commit**"));
+        assert!(back.contains("commit a crime"));
+        assert!(back.contains('\n'));
+        assert_eq!(phonetic, "/kəˈmɪt/");
+        assert_eq!(example, "He committed a crime.");
+    }
 }

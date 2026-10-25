@@ -9,6 +9,7 @@ import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import type { StudyCard, SessionResult, AiExample } from '../types';
 import { save } from '@tauri-apps/plugin-dialog';
 import PreviewGrid from '../components/PreviewGrid';
+import Markdown from '../components/Markdown';
 
 export default function Study() {
   const { id } = useParams<{ id: string }>();
@@ -217,6 +218,7 @@ export default function Study() {
     setUserInput('');
     setPlayedTts(false);
     queryClient.invalidateQueries({ queryKey: ['stats'] });
+    queryClient.invalidateQueries({ queryKey: ['heatmap'] });
   }
 
   function handleDictationSubmit() {
@@ -410,10 +412,16 @@ export default function Study() {
                 {t('study.your_input')}: <span className="line-through">{userInput}</span>
               </div>
             )}
-            <div className="text-lg text-center whitespace-pre-line leading-relaxed">{current.back}</div>
+            <div className="text-center">
+              <Markdown className="inline-block max-h-[50vh] max-w-full overflow-y-auto pr-1 text-left text-lg leading-relaxed">
+                {current.back}
+              </Markdown>
+            </div>
             {current.example_sentence && (
-              <div className="text-sm text-gray-400 dark:text-gray-500 italic text-center whitespace-pre-line">
-                {current.example_sentence}
+              <div className="text-center">
+                <Markdown className="inline-block max-w-full text-left text-sm italic text-gray-400 dark:text-gray-500">
+                  {current.example_sentence}
+                </Markdown>
               </div>
             )}
             {aiExampleLoading && (
@@ -453,10 +461,16 @@ export default function Study() {
                 <div className="text-base text-gray-400 dark:text-gray-500">/{current.phonetic}/</div>
               )}
             </div>
-            <div className="text-lg text-center whitespace-pre-line leading-relaxed">{current.back}</div>
+            <div className="text-center">
+              <Markdown className="inline-block max-h-[50vh] max-w-full overflow-y-auto pr-1 text-left text-lg leading-relaxed">
+                {current.back}
+              </Markdown>
+            </div>
             {current.example_sentence && (
-              <div className="text-sm text-gray-400 dark:text-gray-500 italic text-center whitespace-pre-line">
-                {current.example_sentence}
+              <div className="text-center">
+                <Markdown className="inline-block max-w-full text-left text-sm italic text-gray-400 dark:text-gray-500">
+                  {current.example_sentence}
+                </Markdown>
               </div>
             )}
             {aiExampleLoading && (

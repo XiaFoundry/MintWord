@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { t } from '../lib/i18n';
+import Markdown from './Markdown';
 
 import type { StudyCard } from '../types';
 
@@ -75,8 +76,8 @@ export default function PreviewGrid({ cards, onBack }: PreviewGridProps) {
                     {card.front}
                   </div>
                   {isFocused && (
-                    <div className="mt-1.5 text-xs text-gray-600 dark:text-gray-400 leading-tight break-words max-w-full line-clamp-3 whitespace-pre-line">
-                      {card.back}
+                    <div className="mt-1.5 max-h-[54px] w-full overflow-hidden text-left text-xs text-gray-600 dark:text-gray-400">
+                      <Markdown>{card.back}</Markdown>
                     </div>
                   )}
                 </>
