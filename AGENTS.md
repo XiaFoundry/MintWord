@@ -138,7 +138,7 @@ src-tauri/              Rust 后端
 
 ## Rust 配置要点
 
-- Edition 2021，MSRV 1.80
+- Edition 2021，MSRV 1.90
 - `crate-type = ["staticlib", "cdylib", "rlib"]`（Tauri 要求）
 - Windows 专属依赖：`windows` crate 用于原生 TTS（`Media_SpeechSynthesis`）
 - SQLite 使用 `rusqlite` 的 `bundled` feature（无需系统 sqlite）

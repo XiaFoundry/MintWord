@@ -1,12 +1,12 @@
 [package]
 name = "mintword"
-version = "1.5.2"
+version = "1.5.7"
 description = "MintWord - A vocabulary learning app"
 authors = ["you"]
 license = "AGPL-3.0"
 repository = ""
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.90"
 
 [lib]
 name = "app_lib"
