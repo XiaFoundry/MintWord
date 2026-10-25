@@ -105,7 +105,7 @@ src-tauri/              Rust 后端
   | `toefl` | TOEFL | TOEFL |
   | `ielts` | IELTS | IELTS |
 - **ID**：所有实体（decks、cards、articles）使用 UUID v4。
-- **Tauri 权限**：`capabilities/default.json` 控制前端可访问的能力。当前允许对话框 + 文件系统读取。
+- **Tauri 权限**：`capabilities/default.json` 控制前端可访问的能力。当前允许对话框与打开外部链接（`shell.open`），不授予文件系统插件权限。
 
 ## 国际化 (i18n)
 
@@ -137,7 +137,7 @@ src-tauri/              Rust 后端
 
 ## Rust 配置要点
 
-- Edition 2021，MSRV 1.77.2
+- Edition 2021，MSRV 1.80
 - `crate-type = ["staticlib", "cdylib", "rlib"]`（Tauri 要求）
 - Windows 专属依赖：`windows` crate 用于原生 TTS（`Media_SpeechSynthesis`）
 - SQLite 使用 `rusqlite` 的 `bundled` feature（无需系统 sqlite）

@@ -3,6 +3,7 @@ use crate::db::Database;
 use crate::engine;
 use crate::library;
 use crate::ai;
+use crate::security::{avatar_extension, csv_sanitize_cell, validate_avatar_filename, AVATAR_MAX_BYTES};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -209,6 +210,8 @@ pub fn delete_card(db: State<Database>, card_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_study_cards(db: State<Database>, deck_id: String, limit: i32) -> Result<Vec<StudyCard>, String> {
+    // A negative LIMIT means "unbounded" in SQLite; bound the caller input.
+    let limit = limit.clamp(1, 500);
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
@@ -299,6 +302,7 @@ fn get_fsrs_params_json(conn: &rusqlite::Connection) -> Option<String> {
 
 #[tauri::command]
 pub fn submit_review_simple(db: State<Database>, card_id: String, rating: i32, mastered: bool) -> Result<(), String> {
+    let rating = rating.clamp(0, 5);
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now();
     let now_str = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
@@ -464,6 +468,12 @@ pub fn get_heatmap_data(db: State<Database>) -> Result<Vec<HeatmapDay>, String> 
 
 #[tauri::command]
 pub fn record_study_time(db: State<Database>, date: String, seconds: i64) -> Result<(), String> {
+    chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .map_err(|_| "Invalid study time date".to_string())?;
+    if seconds < 0 {
+        return Err("Study time cannot be negative".to_string());
+    }
+    let seconds = seconds.min(86_400);
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO study_time_log (date, seconds) VALUES (?1, ?2)
@@ -539,6 +549,15 @@ pub fn get_study_streak(db: State<Database>) -> Result<i32, String> {
 
 #[tauri::command]
 pub fn export_session_csv(_db: State<Database>, _deck_id: String, results: Vec<SessionResult>, file_path: String) -> Result<(), String> {
+    let is_csv = std::path::Path::new(&file_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("csv"))
+        .unwrap_or(false);
+    if !is_csv {
+        return Err("Export path must use the .csv extension".to_string());
+    }
+
     let mut wtr = csv::Writer::from_path(&file_path)
         .map_err(|e| format!("Failed to create CSV: {}", e))?;
     wtr.write_record(["card_id", "front", "back", "rating", "mastered"])
@@ -546,10 +565,13 @@ pub fn export_session_csv(_db: State<Database>, _deck_id: String, results: Vec<S
     for r in &results {
         let rating_s = r.rating.to_string();
         let mastered_s = if r.mastered { "1".to_string() } else { "0".to_string() };
+        let card_id = csv_sanitize_cell(&r.card_id);
+        let front = csv_sanitize_cell(&r.front);
+        let back = csv_sanitize_cell(&r.back);
         wtr.write_record([
-            &r.card_id,
-            &r.front,
-            &r.back,
+            card_id.as_ref(),
+            front.as_ref(),
+            back.as_ref(),
             &rating_s,
             &mastered_s,
         ]).map_err(|e| e.to_string())?;
@@ -620,6 +642,7 @@ fn map_quality_to_simple(quality: i32) -> i32 {
 
 #[tauri::command]
 pub fn submit_review(db: State<Database>, card_id: String, quality: i32) -> Result<(), String> {
+    let quality = quality.clamp(0, 5);
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now();
     let now_str = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
@@ -870,11 +893,20 @@ pub fn set_setting(db: State<Database>, key: String, value: String) -> Result<()
 
 #[tauri::command]
 pub fn save_avatar_file(db: State<Database>, source_path: String) -> Result<String, String> {
+    let source = std::path::Path::new(&source_path);
+    let metadata = std::fs::metadata(source)
+        .map_err(|e| format!("Failed to read avatar: {}", e))?;
+    if !metadata.is_file() {
+        return Err("Avatar source is not a file".to_string());
+    }
+    if metadata.len() == 0 || metadata.len() > AVATAR_MAX_BYTES {
+        return Err("Avatar image is empty or too large (max 8 MiB)".to_string());
+    }
+
+    let ext = avatar_extension(&source_path)?;
     let avatar_dir = db.app_dir.join("avatars");
     std::fs::create_dir_all(&avatar_dir).map_err(|e| e.to_string())?;
 
-    let source = std::path::Path::new(&source_path);
-    let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("png");
     let filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
     let dest = avatar_dir.join(&filename);
 
@@ -885,14 +917,30 @@ pub fn save_avatar_file(db: State<Database>, source_path: String) -> Result<Stri
 
 #[tauri::command]
 pub fn get_avatar_base64(db: State<Database>, filename: String) -> Result<String, String> {
-    let path = db.app_dir.join("avatars").join(&filename);
-    let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+    validate_avatar_filename(&filename)?;
 
-    let ext = std::path::Path::new(&filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png");
-    let mime = match ext {
+    let avatar_dir = db.app_dir.join("avatars");
+    let canonical_dir = avatar_dir
+        .canonicalize()
+        .map_err(|e| format!("Avatar directory unavailable: {}", e))?;
+    let canonical_path = avatar_dir
+        .join(&filename)
+        .canonicalize()
+        .map_err(|e| format!("Avatar not found: {}", e))?;
+    if !canonical_path.starts_with(&canonical_dir) {
+        return Err("Invalid avatar path".to_string());
+    }
+
+    let metadata = std::fs::metadata(&canonical_path)
+        .map_err(|e| format!("Avatar not found: {}", e))?;
+    if !metadata.is_file() || metadata.len() > AVATAR_MAX_BYTES {
+        return Err("Avatar file is invalid or too large".to_string());
+    }
+
+    let data = std::fs::read(&canonical_path).map_err(|e| e.to_string())?;
+
+    let ext = avatar_extension(&filename)?;
+    let mime = match ext.as_str() {
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
@@ -1204,13 +1252,15 @@ fn pkce_challenge_s256(verifier: &str) -> String {
 }
 
 fn parse_interval(value: &serde_json::Value) -> u64 {
-    if let Some(n) = value.as_u64() {
-        return n;
-    }
-    if let Some(s) = value.as_str() {
-        return s.trim().parse::<u64>().unwrap_or(5);
-    }
-    5
+    let parsed = if let Some(n) = value.as_u64() {
+        n
+    } else if let Some(s) = value.as_str() {
+        s.trim().parse::<u64>().unwrap_or(5)
+    } else {
+        5
+    };
+    // Never let a hostile/broken response park the polling loop forever.
+    parsed.clamp(1, 60)
 }
 
 #[tauri::command]
@@ -1238,7 +1288,10 @@ pub fn get_chatgpt_login_url() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn request_device_code() -> Result<DeviceCode, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let auth_base_url = format!("{}/api/accounts", OPENAI_AUTH_BASE_URL);
     
     let body = serde_json::json!({
@@ -1284,7 +1337,10 @@ pub async fn request_device_code() -> Result<DeviceCode, String> {
 
 #[tauri::command]
 pub async fn complete_device_code_login(device_code: DeviceCode) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let auth_base_url = format!("{}/api/accounts", OPENAI_AUTH_BASE_URL);
     let max_wait = std::time::Duration::from_secs(15 * 60);
     let start = std::time::Instant::now();
@@ -1359,7 +1415,7 @@ pub async fn complete_device_code_login(device_code: DeviceCode) -> Result<Strin
             if start.elapsed() >= max_wait {
                 return Err("Device auth timed out after 15 minutes".to_string());
             }
-            tokio::time::sleep(std::time::Duration::from_secs(device_code.interval)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(device_code.interval.clamp(1, 60))).await;
             continue;
         }
 

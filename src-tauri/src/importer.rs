@@ -222,6 +222,37 @@ pub fn import_bundled_csv(conn: &mut Connection, csv_data: &str, deck_id: &str) 
     Ok(count)
 }
 
+/// Anki collection databases are uncompressed zip entries. Cap the extracted
+/// size so a crafted `.apkg` cannot exhaust memory/disk (zip bomb).
+const MAX_COLLECTION_BYTES: u64 = 512 * 1024 * 1024;
+
+fn extract_collection_entry(
+    archive: &mut ZipArchive<File>,
+    collection_name: &str,
+) -> Result<NamedTempFile, String> {
+    let collection = archive
+        .by_name(collection_name)
+        .map_err(|e| format!("Failed to read collection from APKG: {}", e))?;
+
+    if collection.size() > MAX_COLLECTION_BYTES {
+        return Err("APKG collection database is too large".to_string());
+    }
+
+    let mut temp_file = NamedTempFile::new()
+        .map_err(|e| format!("Failed to create temp DB: {}", e))?;
+    let mut limited = collection.take(MAX_COLLECTION_BYTES + 1);
+    let copied = std::io::copy(&mut limited, &mut temp_file)
+        .map_err(|e| format!("Failed to extract collection DB: {}", e))?;
+    if copied > MAX_COLLECTION_BYTES {
+        return Err("APKG collection database is too large".to_string());
+    }
+    temp_file
+        .flush()
+        .map_err(|e| format!("Failed to flush temp collection DB: {}", e))?;
+
+    Ok(temp_file)
+}
+
 fn import_apkg(
     conn: &mut Connection,
     deck_id: &str,
@@ -233,22 +264,7 @@ fn import_apkg(
     let collection_name = find_collection_entry(&mut archive)
         .ok_or_else(|| "APKG does not contain collection.anki2 or collection.anki21".to_string())?;
 
-    let mut temp_file = NamedTempFile::new().map_err(|e| format!("Failed to create temp DB: {}", e))?;
-    {
-        let mut collection = archive
-            .by_name(&collection_name)
-            .map_err(|e| format!("Failed to read collection from APKG: {}", e))?;
-        let mut buf = Vec::new();
-        collection
-            .read_to_end(&mut buf)
-            .map_err(|e| format!("Failed to extract collection DB: {}", e))?;
-        temp_file
-            .write_all(&buf)
-            .map_err(|e| format!("Failed to write temp collection DB: {}", e))?;
-        temp_file
-            .flush()
-            .map_err(|e| format!("Failed to flush temp collection DB: {}", e))?;
-    }
+    let temp_file = extract_collection_entry(&mut archive, &collection_name)?;
 
     let anki_conn = Connection::open_with_flags(
         temp_file.path(),
@@ -432,22 +448,7 @@ fn preview_apkg(file_path: &str) -> Result<ImportPreview, String> {
     let collection_name = find_collection_entry(&mut archive)
         .ok_or_else(|| "APKG does not contain collection.anki2 or collection.anki21".to_string())?;
 
-    let mut temp_file = NamedTempFile::new().map_err(|e| format!("Failed to create temp DB: {}", e))?;
-    {
-        let mut collection = archive
-            .by_name(&collection_name)
-            .map_err(|e| format!("Failed to read collection from APKG: {}", e))?;
-        let mut buf = Vec::new();
-        collection
-            .read_to_end(&mut buf)
-            .map_err(|e| format!("Failed to extract collection DB: {}", e))?;
-        temp_file
-            .write_all(&buf)
-            .map_err(|e| format!("Failed to write temp collection DB: {}", e))?;
-        temp_file
-            .flush()
-            .map_err(|e| format!("Failed to flush temp collection DB: {}", e))?;
-    }
+    let temp_file = extract_collection_entry(&mut archive, &collection_name)?;
 
     let anki_conn = Connection::open_with_flags(
         temp_file.path(),
@@ -691,8 +692,12 @@ fn load_anki_models(conn: &Connection) -> Result<HashMap<i64, Vec<String>>, Stri
 
 fn find_collection_entry(archive: &mut ZipArchive<File>) -> Option<String> {
     for idx in 0..archive.len() {
-        let file = archive.by_index(idx).ok()?;
-        let name = file.name().to_string();
+        let Ok(file) = archive.by_index(idx) else {
+            continue;
+        };
+        let Ok(name) = file.name().map(|name| name.into_owned()) else {
+            continue;
+        };
         if name.ends_with("collection.anki2") || name.ends_with("collection.anki21") {
             return Some(name);
         }

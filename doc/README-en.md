@@ -66,7 +66,7 @@ English decks are based on [ECDICT](https://github.com/skywind3000/ECDICT) (MIT 
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) (v18+)
-- [Rust](https://www.rust-lang.org/) (1.77.2+)
+- [Rust](https://www.rust-lang.org/) (1.80+)
 - [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/)
 
 ### Development
