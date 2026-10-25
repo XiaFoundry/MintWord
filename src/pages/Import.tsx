@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getDecks, previewImportFile, importDeckFile, bulkAddCards, createDeck, deleteDeck } from '../lib/api';
-import { t } from '../lib/i18n';
+import { t, LANGUAGES } from '../lib/i18n';
 import Select from '../components/Select';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import type { ImportReport, ImportPreview, FieldMappingSelection } from '../types';
@@ -23,11 +23,14 @@ export default function ImportPage() {
   const [selectedDeck, setSelectedDeck] = useState(searchParams.get('deckId') ?? '');
   const [bulkText, setBulkText] = useState('');
   const [newDeckName, setNewDeckName] = useState('');
+  const [newDeckLangFrom, setNewDeckLangFrom] = useState('en');
+  const [newDeckLangTo, setNewDeckLangTo] = useState('zh');
   const [importMode, setImportMode] = useState<'existing' | 'new'>('existing');
   const [phase, setPhase] = useState<ImportPhase>({ kind: 'idle' });
   const [mapping, setMapping] = useState<FieldMappingSelection>(emptyMapping());
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
   const previewRef = useRef<{ filePath: string; preview: ImportPreview; mode: 'existing' | 'new' } | null>(null);
+  const languageOptions = LANGUAGES.map((language) => ({ value: language.code, label: language.name }));
 
   function showToast(msg: string) {
     setToast({ message: msg, visible: true });
@@ -68,8 +71,8 @@ export default function ImportPage() {
         const deck = await createDeck(
           newDeckName.trim() || fileStem(filePath),
           t('import.new_deck_desc'),
-          'en',
-          'zh',
+          newDeckLangFrom,
+          newDeckLangTo,
         );
         createdDeckId = deck.id;
         targetDeck = deck.id;
@@ -195,6 +198,20 @@ export default function ImportPage() {
           disabled={phase.kind === 'previewing' || phase.kind === 'importing'}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
         />
+        <div className="grid grid-cols-2 gap-3">
+          <Select
+            label={t('deck.language_from')}
+            value={newDeckLangFrom}
+            onChange={setNewDeckLangFrom}
+            options={languageOptions}
+          />
+          <Select
+            label={t('deck.language_to')}
+            value={newDeckLangTo}
+            onChange={setNewDeckLangTo}
+            options={languageOptions}
+          />
+        </div>
         {importMode === 'new' && phase.kind === 'previewing' && (
           <StatusBox>{t('import.status_previewing')}</StatusBox>
         )}
