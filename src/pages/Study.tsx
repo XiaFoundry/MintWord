@@ -20,6 +20,7 @@ export default function Study() {
   const [flipped, setFlipped] = useState(false);
   const [done, setDone] = useState(false);
   const [results, setResults] = useState<SessionResult[]>([]);
+  const [exportError, setExportError] = useState('');
   const [notes, setNotes] = useState('');
   const [playedTts, setPlayedTts] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
@@ -229,14 +230,18 @@ export default function Study() {
 
   async function handleExportCsv() {
     if (!id) return;
+    setExportError('');
     try {
       const filePath = await save({
         filters: [{ name: 'CSV', extensions: ['csv'] }],
         defaultPath: `vocabsprint-session-${Date.now()}.csv`,
       });
       if (!filePath) return;
-      await exportSessionCsv(id, results, filePath);
-    } catch { /* ignore */ }
+      const targetPath = filePath.toLowerCase().endsWith('.csv') ? filePath : `${filePath}.csv`;
+      await exportSessionCsv(id, results, targetPath);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   useEffect(() => {
@@ -318,6 +323,9 @@ export default function Study() {
             {t('study.back_home')}
           </Link>
         </div>
+        {exportError && (
+          <p className="text-sm text-red-500">{exportError}</p>
+        )}
       </div>
     );
   }
