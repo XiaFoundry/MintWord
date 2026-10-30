@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
-import { getStudyCards, submitReviewSimple, updateCardNotes, speakText, speakAi, stopTts, exportSessionCsv, getSetting, generateAiExample } from '../lib/api';
+import { getStudyCards, getDecks, submitReviewSimple, updateCardNotes, speakText, speakAi, stopTts, exportSessionCsv, getSetting, generateAiExample } from '../lib/api';
 import { t } from '../lib/i18n';
 import { useStudyTimer } from '../hooks/useStudyTimer';
-import { ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import DailyArticleModal from '../components/DailyArticleModal';
 
 import type { StudyCard, SessionResult, AiExample } from '../types';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -24,10 +25,12 @@ export default function Study() {
   const [notes, setNotes] = useState('');
   const [playedTts, setPlayedTts] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
+  const [showDailyArticle, setShowDailyArticle] = useState(false);
   const [userInput, setUserInput] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const notesRef = useRef<HTMLTextAreaElement>(null);
   const [aiExampleEnabled, setAiExampleEnabled] = useState(false);
+  const [dailyArticleEnabled, setDailyArticleEnabled] = useState(false);
   const [aiExample, setAiExample] = useState<AiExample | null>(null);
   const [aiExampleLoading, setAiExampleLoading] = useState(false);
   const [aiExampleError, setAiExampleError] = useState<string | null>(null);
@@ -41,12 +44,17 @@ export default function Study() {
     enabled: !!id,
   });
 
+  const { data: decks } = useQuery({ queryKey: ['decks'], queryFn: getDecks });
+  const currentDeck = decks?.find((d) => d.id === id);
+
   useEffect(() => {
     if (fetched) {
       (async () => {
         const dictation = await getSetting('dictation_enabled');
         const allow = dictation !== 'false';
         const aiExample = await getSetting('ai_example_enabled');
+        const dailyArticle = await getSetting('daily_article_enabled');
+        setDailyArticleEnabled(dailyArticle === 'true');
         setAiExampleEnabled(aiExample === 'true');
         const total = fetched.length;
 
@@ -310,6 +318,15 @@ export default function Study() {
           >
             {t('study.quick_preview')}
           </button>
+          {dailyArticleEnabled && (
+            <button
+              onClick={() => setShowDailyArticle(true)}
+              className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-lg text-sm hover:from-emerald-600 hover:to-teal-700 transition-colors font-medium flex items-center gap-1.5 shadow-sm"
+            >
+              <SparklesIcon className="w-4 h-4" />
+              {t('daily_article.generate_btn')}
+            </button>
+          )}
           <button
             onClick={handleExportCsv}
             className="px-4 py-2 bg-gray-200 dark:bg-gray-800 rounded-lg text-sm hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors"
@@ -325,6 +342,15 @@ export default function Study() {
         </div>
         {exportError && (
           <p className="text-sm text-red-500">{exportError}</p>
+        )}
+        {dailyArticleEnabled && (
+          <DailyArticleModal
+            open={showDailyArticle}
+            onClose={() => setShowDailyArticle(false)}
+            initialWords={Array.from(new Set(results.map((r) => r.front.trim()))).filter(Boolean)}
+            deckName={currentDeck?.name}
+            deckLanguage={currentDeck?.language_from || originalCards[0]?.language_from || 'en'}
+          />
         )}
       </div>
     );

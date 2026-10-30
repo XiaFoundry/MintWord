@@ -1,5 +1,5 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import type { Deck, Card, StudyCard, ReviewStats, HeatmapDay, SessionResult, DeckProgress, Article, ArticleSummary, Question, ProviderConfig, ImportReport, ImportPreview, FieldMappingSelection, Composition, CompositionSummary, CompositionReview, AiExample, StudyTimeEntry } from '../types';
+import type { Deck, Card, StudyCard, ReviewStats, HeatmapDay, SessionResult, DeckProgress, Article, ArticleSummary, Question, ProviderConfig, ImportReport, ImportPreview, FieldMappingSelection, Composition, CompositionSummary, CompositionReview, AiExample, StudyTimeEntry, StudiedWord, DailyArticleResult } from '../types';
 
 const TAURI_AVAILABLE = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -232,6 +232,29 @@ export async function getAiPrompt(): Promise<string> {
 
 export async function setAiPrompt(prompt: string): Promise<void> {
   return invoke('set_ai_prompt', { prompt });
+}
+
+// === Daily Article ===
+
+export async function getTodayStudiedWords(date?: string): Promise<StudiedWord[]> {
+  return invoke('get_today_studied_words', { date: date ?? null });
+}
+
+export async function getDailyArticlePrompt(): Promise<string> {
+  return invoke('get_daily_article_prompt');
+}
+
+export async function setDailyArticlePrompt(prompt: string): Promise<void> {
+  return invoke('set_daily_article_prompt', { prompt });
+}
+
+export async function generateDailyArticle(
+  words: string[],
+  language: string,
+  config: ProviderConfig,
+  prompt?: string,
+): Promise<DailyArticleResult> {
+  return invoke('generate_daily_article', { words, language, config, prompt: prompt ?? null });
 }
 
 // === Device Code Login ===

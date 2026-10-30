@@ -92,6 +92,17 @@ export interface ArticleSummary {
   has_questions: boolean;
 }
 
+export interface StudiedWord {
+  front: string;
+  back: string;
+}
+
+export interface DailyArticleResult {
+  title: string;
+  content: string;
+  questions: Question[];
+}
+
 export interface Question {
   id: string;
   question: string;

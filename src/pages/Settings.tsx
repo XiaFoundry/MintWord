@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { speakText, speakAi, getPlatform, getSetting, setSetting, setAiPrompt, setCompositionReviewPrompt, clearLearningProgress, clearReviewLogs, clearSettings, clearAllCache, checkNativeTtsVoice } from '../lib/api';
+import { speakText, speakAi, getPlatform, getSetting, setSetting, setAiPrompt, setCompositionReviewPrompt, clearLearningProgress, clearReviewLogs, clearSettings, clearAllCache, checkNativeTtsVoice, getDailyArticlePrompt, setDailyArticlePrompt } from '../lib/api';
+import { DEFAULT_DAILY_ARTICLE_TEMPLATE } from '../lib/dailyArticlePrompt';
 import { t, setLang, getLang, type Lang } from '../lib/i18n';
 import Select from '../components/Select';
 import TooltipIcon from '../components/TooltipIcon';
@@ -37,6 +38,7 @@ export default function Settings() {
   const [theme, setTheme] = useState<Theme>('mint');
   const [darkMode, setDarkMode] = useState(false);
   const [dictationEnabled, setDictationEnabled] = useState(true);
+  const [dailyArticleEnabled, setDailyArticleEnabled] = useState(false);
   const [algorithm, setAlgorithm] = useState('sm2');
   const [fsrsRetention, setFsrsRetention] = useState('0.90');
   const [fsrsMaxInterval, setFsrsMaxInterval] = useState('36500');
@@ -53,6 +55,8 @@ export default function Settings() {
   const [aiExampleEnabled, setAiExampleEnabled] = useState(false);
   const [aiExamplePrompt, setAiExamplePrompt] = useState('');
   const [aiExamplePromptExpanded, setAiExamplePromptExpanded] = useState(false);
+  const [dailyArticlePrompt, setDailyArticlePromptState] = useState('');
+  const [dailyArticlePromptExpanded, setDailyArticlePromptExpanded] = useState(false);
 
   const [confirmModal, setConfirmModal] = useState<{
     title: string;
@@ -95,6 +99,10 @@ export default function Settings() {
       if (savedDark === 'true') {
         setDarkMode(true);
       }
+      const savedDailyArticle = await getSetting('daily_article_enabled');
+      if (savedDailyArticle === 'true') {
+        setDailyArticleEnabled(true);
+      }
       const savedDictation = await getSetting('dictation_enabled');
       if (savedDictation === 'false') {
         setDictationEnabled(false);
@@ -113,6 +121,8 @@ export default function Settings() {
       if (savedAiExample === 'true') setAiExampleEnabled(true);
       const savedAiExamplePrompt = await getSetting('ai_example_prompt');
       if (savedAiExamplePrompt) setAiExamplePrompt(savedAiExamplePrompt);
+      const savedDailyPrompt = await getDailyArticlePrompt();
+      if (savedDailyPrompt) setDailyArticlePromptState(savedDailyPrompt);
     })();
   }, []);
 
@@ -611,6 +621,58 @@ export default function Settings() {
                     </div>
                   </div>
                 </section>
+
+                <section className="space-y-4">
+                  <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                    {t('settings.daily_article_prompt_title')}
+                  </h2>
+                  <div className="bg-white dark:bg-gray-900 rounded-lg border border-border p-4 space-y-3">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">{t('settings.daily_article_prompt_desc')}</p>
+
+                    <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+                      <button
+                        type="button"
+                        onClick={() => setDailyArticlePromptExpanded(!dailyArticlePromptExpanded)}
+                        className="text-xs text-primary hover:underline flex items-center gap-1"
+                      >
+                        {dailyArticlePromptExpanded ? t('ai.quiz_collapse_prompt') : t('ai.quiz_expand_prompt')}
+                        {dailyArticlePromptExpanded ? <ChevronUpIcon className="w-3 h-3" /> : <ChevronDownIcon className="w-3 h-3" />}
+                      </button>
+
+                      <div
+                        className="grid transition-all duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
+                        style={{ gridTemplateRows: dailyArticlePromptExpanded ? '1fr' : '0fr' }}
+                      >
+                        <div className="overflow-hidden">
+                          <div className="mt-3 space-y-3">
+                            <div className="flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDailyArticlePrompt(DEFAULT_DAILY_ARTICLE_TEMPLATE);
+                                  setDailyArticlePromptState(DEFAULT_DAILY_ARTICLE_TEMPLATE);
+                                }}
+                                className="text-xs text-primary hover:underline shrink-0"
+                              >
+                                {t('settings.ai_example_prompt_reset')}
+                              </button>
+                            </div>
+                            <textarea
+                              value={dailyArticlePrompt || DEFAULT_DAILY_ARTICLE_TEMPLATE}
+                              onChange={(e) => {
+                                setDailyArticlePromptState(e.target.value);
+                                setDailyArticlePrompt(e.target.value);
+                              }}
+                              rows={10}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none font-mono"
+                            />
+                            <p className="text-xs text-gray-400">可用占位符：&#123;language&#125;（目标语言）、&#123;difficulty&#125;（词库难度）、&#123;questionInstructions&#125;（题目说明）、&#123;questionFormat&#125;（题目格式）</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
               </>
             )}
             {aiView === 'add' && (
@@ -657,6 +719,32 @@ export default function Settings() {
                 >
                   <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
                     dictationEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  }`} />
+                </button>
+              </label>
+            </div>
+
+            <div className="bg-white dark:bg-gray-900 rounded-lg border border-border p-4 space-y-3">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <div className="text-sm font-medium">{t('settings.daily_article_enabled')}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.daily_article_enabled_desc')}</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={dailyArticleEnabled}
+                  onClick={async () => {
+                    const val = !dailyArticleEnabled;
+                    setDailyArticleEnabled(val);
+                    await setSetting('daily_article_enabled', val.toString());
+                  }}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary ${
+                    dailyArticleEnabled ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                    dailyArticleEnabled ? 'translate-x-5' : 'translate-x-0.5'
                   }`} />
                 </button>
               </label>
