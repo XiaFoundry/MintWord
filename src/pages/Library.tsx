@@ -31,7 +31,14 @@ const SECTIONS: SectionConfig[] = [
     labelKey: 'nav.articles',
     emptyKey: 'library.empty',
     linkPrefix: '/library',
-    getBadge: (item) => item.hasBadge ? '有题目' : null,
+    getBadge: (item) =>
+      item.source === 'daily_practice' || item.source === 'session_practice'
+        ? item.hasBadge
+          ? `${t('daily_article.badge')} · 有题目`
+          : t('daily_article.badge')
+        : item.hasBadge
+          ? '有题目'
+          : null,
   },
   {
     type: 'composition',
