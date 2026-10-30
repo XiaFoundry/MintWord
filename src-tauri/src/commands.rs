@@ -82,6 +82,12 @@ pub struct SessionResult {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct StudiedWord {
+    pub front: String,
+    pub back: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct DeckProgress {
     pub total_count: i32,
     pub studied_count: i32,
@@ -735,6 +741,28 @@ pub fn get_stats(db: State<Database>) -> Result<ReviewStats, String> {
 }
 
 #[tauri::command]
+pub fn get_today_studied_words(db: State<Database>, date: Option<String>) -> Result<Vec<StudiedWord>, String> {
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let target_date = date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT c.front, c.back
+         FROM review_log r
+         JOIN cards c ON r.card_id = c.id
+         WHERE r.reviewed_at LIKE ?1 || '%' OR r.reviewed_at >= ?1
+         ORDER BY r.reviewed_at DESC"
+    ).map_err(|e| e.to_string())?;
+    let words = stmt.query_map(rusqlite::params![target_date], |row| {
+        Ok(StudiedWord {
+            front: row.get(0)?,
+            back: row.get(1)?,
+        })
+    }).map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())?;
+    Ok(words)
+}
+
+#[tauri::command]
 pub fn import_csv_file(
     db: State<Database>,
     deck_id: String,
@@ -1146,6 +1174,46 @@ pub fn set_ai_prompt(db: State<Database>, prompt: String) -> Result<(), String> 
         rusqlite::params![prompt],
     ).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_daily_article_prompt(db: State<Database>) -> Result<String, String> {
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let result: Result<String, _> = conn.query_row(
+        "SELECT value FROM settings WHERE key = 'daily_article_prompt'",
+        [],
+        |row| row.get(0),
+    );
+    match result {
+        Ok(val) if !val.is_empty() => Ok(val),
+        _ => Ok(ai::DEFAULT_DAILY_ARTICLE_PROMPT.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn set_daily_article_prompt(db: State<Database>, prompt: String) -> Result<(), String> {
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('daily_article_prompt', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = ?1",
+        rusqlite::params![prompt],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn generate_daily_article(
+    db: State<'_, Database>,
+    words: Vec<String>,
+    language: String,
+    config: ai::ProviderConfig,
+    prompt: Option<String>,
+) -> Result<ai::DailyArticleResult, String> {
+    let system_prompt = match prompt {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => get_daily_article_prompt(db)?,
+    };
+    ai::generate_daily_article_content(&config, &system_prompt, &words, &language).await
 }
 
 #[tauri::command]

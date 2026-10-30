@@ -147,6 +147,10 @@ pub fn run() {
             commands::get_study_time_range,
             commands::get_study_time_daily,
             commands::get_study_streak,
+            commands::get_today_studied_words,
+            commands::get_daily_article_prompt,
+            commands::set_daily_article_prompt,
+            commands::generate_daily_article,
 
         ])
         .run(tauri::generate_context!())
